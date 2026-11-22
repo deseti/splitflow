@@ -398,6 +398,29 @@ export function BillDetail() {
       <div className="mt-4">
         <EscrowWarning />
       </div>
+
+      {/* Contract reference */}
+      <div
+        className="mt-6 flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-xs"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+      >
+        <span style={{ color: 'var(--muted)' }}>
+          Contract{' '}
+          <span className="mono" style={{ color: 'var(--ink)' }}>
+            {shortAddr('0xf28Ee372004dfEb66e54a014E437fbd196d79bB6')}
+          </span>
+          {' '}· Arc Mainnet · USDC
+        </span>
+        <a
+          href="https://explorer.arc.io/address/0xf28Ee372004dfEb66e54a014E437fbd196d79bB6?tab=contract"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 font-medium transition-opacity hover:opacity-70 shrink-0"
+          style={{ color: 'var(--accent-hover)' }}
+        >
+          Explorer <ExternalLink className="size-3" />
+        </a>
+      </div>
     </main>
   )
 }

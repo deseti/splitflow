@@ -1,4 +1,4 @@
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { Plus, SplitSquareVertical } from 'lucide-react'
 import { useAccount } from 'wagmi'
 import { ARC_MAINNET_CHAIN_ID } from '@/lib/splitflow'
@@ -42,8 +42,18 @@ export function Navbar() {
           </span>
         </button>
 
-        {/* Right controls */}
+        {/* Nav links + right controls */}
         <div className="flex items-center gap-2">
+
+          {/* Docs link */}
+          <Link
+            to="/docs"
+            className="hidden sm:inline-flex items-center text-xs font-medium transition-opacity hover:opacity-70 px-2 py-1.5"
+            style={{ color: 'var(--muted)' }}
+          >
+            Docs
+          </Link>
+
           {wrongChain && (
             <span
               className="hidden sm:inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"

@@ -4,6 +4,7 @@ import { Footer } from './components/Footer'
 import { Home } from './pages/Home'
 import { CreateBill } from './pages/CreateBill'
 import { BillDetail } from './pages/BillDetail'
+import { DocsPage } from './pages/DocsPage'
 
 export default function App() {
   return (
@@ -12,10 +13,11 @@ export default function App() {
         <Navbar />
         <div className="flex-1">
           <Routes>
-            <Route path="/"          element={<Home />} />
-            <Route path="/create"    element={<CreateBill />} />
-            <Route path="/bill/:id"  element={<BillDetail />} />
-            <Route path="*"          element={<Home />} />
+            <Route path="/"         element={<Home />} />
+            <Route path="/create"   element={<CreateBill />} />
+            <Route path="/bill/:id" element={<BillDetail />} />
+            <Route path="/docs"     element={<DocsPage />} />
+            <Route path="*"         element={<Home />} />
           </Routes>
         </div>
         <Footer />
