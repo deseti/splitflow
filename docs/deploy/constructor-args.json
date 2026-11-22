@@ -1,0 +1,8 @@
+{
+  "function": "constructor(address _usdc)",
+  "args": {
+    "_usdc": "0x3600000000000000000000000000000000000000"
+  },
+  "abi_encoded_hex": "0000000000000000000000003600000000000000000000000000000000000000",
+  "description": "Arc Mainnet USDC ERC-20 \u2014 verified: decimals=6, symbol=USDC, name=USDC"
+}

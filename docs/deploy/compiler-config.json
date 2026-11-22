@@ -1,0 +1,12 @@
+{
+  "compiler": "solc 0.8.28+commit.7893614a",
+  "evmVersion": "paris",
+  "optimizer": {
+    "enabled": true,
+    "runs": 200
+  },
+  "license": "MIT",
+  "contract": "SplitFlow",
+  "sourceFile": "contracts/SplitFlow.sol",
+  "entrypoint": "contracts/SplitFlow.sol:SplitFlow"
+}

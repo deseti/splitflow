@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Environment — never commit secrets or credentials
+.env
+.env.*
+!.env.example
+
+# Circle credentials
+.circle/
+
+# Build output
+dist/
+contracts/out/
+contracts/cache/
+
+# Foundry intermediates
+cache/
+broadcast/
+
+# Vite cache
+.vite/
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs
+*.log
+/tmp/
+
+# Arc Studio runtime debug files
+console.jsonl
+traces.jsonl
+
+# Arc Studio internal plan state
+arc-studio-plans/.arc-studio-plans.json

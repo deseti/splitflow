@@ -1,0 +1,57 @@
+{
+  "reproducibility": {
+    "status": "CONFIRMED",
+    "method": "solc 0.8.28 --standard-json --base-path . --allow-paths .,./lib docs/deploy/SplitFlow.standard-input.json",
+    "notes": "Forge build-info input (language+sources+settings keys only) recompiles to identical creation and deployed bytecodes"
+  },
+  "source": {
+    "file": "contracts/SplitFlow.sol",
+    "sha256": "23368ec737c0c8f05c80aadade68e940a34fa20e471d31fa7e550c95d0501af1",
+    "size_bytes": 19902,
+    "lines": 501,
+    "multibyte_utf8_chars": 2991
+  },
+  "creation_bytecode": {
+    "sha256": "0e2be52d87fc5a14bb15485e488fb1f871197ae01573eeba33cb7f859c05c2b0",
+    "keccak256": "0x5a5d9da2a2c6a2376531fa38b70ae9d7ef1229c0c23a5ca89f198274be675d89",
+    "size_bytes": 6330,
+    "note": "Deploy this + ABI-encoded constructor arg. Do not append constructor arg to this hash."
+  },
+  "deployed_bytecode": {
+    "sha256": "74e87d8e24e7c73b7787931fc74154659e78613ea9ef874d511f95aab56ebf04",
+    "keccak256": "0xcce9baf4d7e2b1266257ef9650547ff20a85a3e3d30608e3ce184f3195ba1def",
+    "size_bytes": 6083,
+    "eip170_limit_bytes": 24576,
+    "under_limit": true,
+    "runtime_code_bytes_excl_cbor_suffix": 6030,
+    "cbor_suffix_bytes": 51,
+    "ipfs_cid_keccak_hex": "6673582212204ea07b475f7f4163858843c153f9b419bf4a890caf77eaa2fdfe9379935b601664736f6c634300081c",
+    "solc_version_in_cbor": "0.8.28"
+  },
+  "constructor_arg": {
+    "_usdc_abi_encoded": "0000000000000000000000003600000000000000000000000000000000000000",
+    "_usdc_address": "0x3600000000000000000000000000000000000000",
+    "verified_live": {
+      "decimals": 6,
+      "name": "USDC",
+      "symbol": "USDC",
+      "has_code": true
+    }
+  },
+  "test_suite": {
+    "command": "forge test -vvv",
+    "result": "43 passed, 0 failed, 0 skipped",
+    "rerun_this_session": true,
+    "invariant_calls_each": 128000,
+    "invariants": [
+      "solvency",
+      "depositCountMonotone",
+      "slotBinary"
+    ]
+  },
+  "cbor_mismatch_analysis": {
+    "cause": "bare solc --standard-json omits metadata.useLiteralContent=false, bytecodeHash=ipfs, appendCBOR=true and includes CLI-only keys (version, allowPaths, basePath) in JSON body",
+    "fix_applied": "Use Forge build-info input with CLI-only keys removed; pass --base-path and --allow-paths as CLI flags",
+    "runtime_code_always_matched": true
+  }
+}
