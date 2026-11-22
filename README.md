@@ -20,10 +20,11 @@ SplitFlow replaces the trusted middleman with a smart contract. Each participant
 ## How It Works
 
 1. **Create a bill.** The creator sets a title, recipient address, total USDC amount, up to 5 payer addresses with exact share amounts, and a funding deadline.
-2. **Each payer deposits their share.** Payers approve USDC spending for their assigned amount, then call `deposit()`. The contract validates the caller, accepts exactly the assigned amount, and records the deposit.
-3. **Settlement.** Once all shares are deposited, anyone can call `settleBill()` to transfer the full amount to the recipient. Settlement is permitted until 7 days after the funding deadline (the settlement grace period).
-4. **Refunds.** If the bill expires underfunded (past the funding deadline), or if a fully funded bill is not settled within the grace period, each depositor can individually reclaim their contribution via `refund()`.
-5. **Cancellation.** The bill creator can cancel the bill before any deposit has ever been accepted.
+2. **Each payer deposits their share.** Payers approve USDC spending for their assigned amount, then call `deposit()`. The contract validates the caller and accepts exactly the assigned amount.
+3. **Automatic settlement on full funding.** When the final payer's deposit fills the last slot, the contract immediately transfers the full amount to the recipient in the same transaction — no separate settlement call needed. If that transfer fails (e.g., a blacklisted recipient), the final deposit reverts cleanly; no funds are stuck.
+4. **Manual settlement fallback.** `settleBill()` remains available as a fallback for bills that were funded before this version deployed, or any edge case where auto-settlement did not complete. It reverts `AlreadySettled` if the bill was already auto-settled.
+5. **Refunds.** If the bill expires underfunded (past the funding deadline), each depositor can individually reclaim their contribution via `refund()`.
+6. **Cancellation.** The bill creator can cancel the bill before any deposit has ever been accepted.
 
 ---
 
@@ -74,20 +75,21 @@ struct Bill {
 ### State Machine
 
 ```
-OPEN ──(creator, zero deposits)──────────────────→ CANCELLED
-OPEN ──(all slots filled)────────────────────────→ FUNDED
-OPEN ──(timestamp >= deadline, underfunded)──────→ REFUNDABLE
-FUNDED ──(settleBill, timestamp <= settleDeadline)→ SETTLED
-FUNDED ──(timestamp > settleDeadline)────────────→ REFUNDABLE
+OPEN ──(creator, zero deposits)─────────────────────────────────→ CANCELLED
+OPEN ──(all slots filled via deposit())─────────────────────────→ SETTLED  (auto-settle in same tx)
+OPEN ──(timestamp >= deadline, underfunded)─────────────────────→ REFUNDABLE
+SETTLED ←─ (also reachable via explicit settleBill() fallback if not auto-settled)
 ```
+
+Note: the FUNDED state is transient — it exists only for the duration of the final `deposit()` call before auto-settlement fires. A bill observable externally is either OPEN (partially funded), SETTLED, REFUNDABLE, or CANCELLED.
 
 ### Function Reference
 
 | Function | Caller | Guard |
 |---|---|---|
 | `createBill(title, recipient, totalAmount, payers[], shares[], deadline)` | Anyone | `sum(shares) == totalAmount`, 2–5 payers, future deadline |
-| `deposit(billId)` | Assigned payer | `timestamp < deadline`, slot not filled, not cancelled/settled |
-| `settleBill(billId)` | Anyone | Fully funded, `timestamp <= settleDeadline`, not settled |
+| `deposit(billId)` | Assigned payer | `timestamp < deadline`, slot not filled, not cancelled/settled. Auto-settles if this is the last slot. |
+| `settleBill(billId)` | Anyone | Fully funded, `timestamp <= settleDeadline`, not settled. Manual fallback — normally settlement is automatic. |
 | `refund(billId)` | Depositor | `isRefundable()`, not settled, deposited[slot] > 0 |
 | `cancelBill(billId)` | Creator | `depositCount == 0`, not already cancelled |
 | `getBill(billId)` | View | — |
@@ -207,10 +209,10 @@ The contract test suite is at `contracts/test/SplitFlow.t.sol`.
 
 | Test type | Count | Result |
 |---|---|---|
-| Unit tests | 37 | All pass |
+| Unit tests | 44 | All pass |
 | Fuzz tests | 2 (256 runs each) | All pass |
 | Stateful invariant tests | 3 (128,000 calls each) | All pass |
-| **Total** | **43** | **43/43 pass** |
+| **Total** | **49** | **49/49 pass** |
 
 Invariants verified:
 - `USDC.balanceOf(contract) >= sum(active deposits)` — solvency never violated

@@ -13,7 +13,8 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *
  *   OPEN ──────────────────────────────────────────→ CANCELLED  (creator, depositCount == 0)
  *   OPEN → (block.timestamp >= deadline, underfunded) → REFUNDABLE
- *   OPEN → FUNDED → (block.timestamp <= settleDeadline) → SETTLED
+ *   OPEN → FUNDED → SETTLED  (inside deposit() when the final slot is filled)
+ *   OPEN → FUNDED → (block.timestamp <= settleDeadline) → SETTLED  (manual settleBill() fallback)
  *   OPEN → FUNDED → (block.timestamp > settleDeadline, unsettled) → REFUNDABLE
  *
  * Exact boundary rules (applied identically here, in billState.ts, and in tests):
@@ -291,6 +292,9 @@ contract SplitFlow is ReentrancyGuard {
      *
      *      Deposit is permitted only while block.timestamp < deadline (strict less-than).
      *
+     *      If this deposit fills the final payer slot, the bill is automatically settled
+     *      in the same transaction by transferring totalAmount to the recipient.
+     *
      * @param billId The bill to deposit into.
      */
     function deposit(uint256 billId) external nonReentrant {
@@ -316,9 +320,19 @@ contract SplitFlow is ReentrancyGuard {
 
         emit Deposited(billId, msg.sender, amount, slot);
 
-        // Emit BillFunded if this was the last slot
+        // If this was the last slot, settle immediately in the same transaction
         if (b.depositCount == b.payerCount) {
             emit BillFunded(billId);
+
+            // ── CEI: mark settled before external call ──
+            b.settled = true;
+            uint256 amount2 = b.totalAmount;
+            address recip = b.recipient;
+
+            // ── External call: push funds to recipient ──
+            usdc.safeTransfer(recip, amount2);
+
+            emit BillSettled(billId, recip, amount2);
         }
     }
 
@@ -328,6 +342,7 @@ contract SplitFlow is ReentrancyGuard {
      * @dev Permissionless: any address may call this function. No approval required
      *      from the caller — funds move from the contract's own balance to the recipient.
      *
+     *      Manual fallback in case auto-settlement was not triggered or failed during deposit.
      *      Settlement is permitted while block.timestamp <= settleDeadline (inclusive).
      *
      * @param billId The bill to settle.

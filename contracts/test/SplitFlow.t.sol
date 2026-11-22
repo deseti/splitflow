@@ -90,10 +90,10 @@ contract Test_HappyPath2Payers is SplitFlowBase {
         _fund(bob,   SHARE_BOB);
 
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
 
+        // Bob is the last payer — deposit() auto-settles, no separate settleBill() needed
         uint256 recipientBefore = usdc.balanceOf(recipient);
-        sf.settleBill(billId);
+        vm.prank(bob); sf.deposit(billId);
 
         assertEq(usdc.balanceOf(recipient), recipientBefore + TOTAL_2, "recipient received total");
         assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.SETTLED));
@@ -107,13 +107,13 @@ contract Test_HappyPath5Payers is SplitFlowBase {
     function test_happyPath5Payers() public {
         (uint256 billId,) = _createBill5(recipient, 1 days);
         address[5] memory payers5 = [alice, bob, carol, dave, eve];
+        uint256 before = usdc.balanceOf(recipient);
         for (uint8 i = 0; i < 5; i++) {
             _fund(payers5[i], 20e6);
             vm.prank(payers5[i]);
-            sf.deposit(billId);
+            sf.deposit(billId); // last deposit (eve) auto-settles
         }
-        uint256 before = usdc.balanceOf(recipient);
-        sf.settleBill(billId);
+        // No separate settleBill() needed — eve's deposit auto-settled
         assertEq(usdc.balanceOf(recipient), before + 100e6);
         assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.SETTLED));
     }
@@ -147,14 +147,11 @@ contract Test_DepositDeadlineBoundary is SplitFlowBase {
 // ─────────────────────────────────────────────────────────────────────────────
 contract Test_SettleGracePeriodBoundary is SplitFlowBase {
     function test_settleAtSettleDeadline_succeeds() public {
-        (uint256 billId, uint256 deadline) = _createBill2(recipient, 1 days);
+        (uint256 billId,) = _createBill2(recipient, 1 days);
         _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
-
-        uint256 settleDeadline = deadline + GRACE;
-        vm.warp(settleDeadline); // inclusive → should succeed
-        sf.settleBill(billId);
+        // Bob's deposit auto-settles — no warp or explicit settleBill needed
+        vm.prank(bob); sf.deposit(billId);
         assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.SETTLED));
     }
 
@@ -162,11 +159,12 @@ contract Test_SettleGracePeriodBoundary is SplitFlowBase {
         (uint256 billId, uint256 deadline) = _createBill2(recipient, 1 days);
         _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
+        vm.prank(bob);   sf.deposit(billId); // auto-settles
 
+        // Any explicit settleBill() after auto-settlement reverts AlreadySettled
         uint256 settleDeadline = deadline + GRACE;
-        vm.warp(settleDeadline + 1); // exclusive → SettleDeadlinePassed
-        vm.expectRevert(SplitFlow.SettleDeadlinePassed.selector);
+        vm.warp(settleDeadline + 1);
+        vm.expectRevert(SplitFlow.AlreadySettled.selector);
         sf.settleBill(billId);
     }
 }
@@ -195,26 +193,41 @@ contract Test_UnderfundedExpiry is SplitFlowBase {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 6 – Funded expiry: all deposit, warp past settleDeadline, everyone refunds;
-//           double refund reverts NothingToRefund
+// Test 6 – Funded expiry: with auto-settlement, all deposits immediately settle,
+//           so the funded-but-unsettled-past-grace-period state is not reachable
+//           for new bills. This test instead verifies:
+//           (a) auto-settle fires on full funding,
+//           (b) refund after auto-settlement reverts AlreadySettled,
+//           (c) underfunded expiry refund path still works correctly.
 // ─────────────────────────────────────────────────────────────────────────────
 contract Test_FundedExpiry is SplitFlowBase {
-    function test_fundedExpiry_refundsAndDoubleRefund() public {
+    // (a)+(b): auto-settle means refund after full funding is always AlreadySettled
+    function test_fundedExpiry_autoSettleBlocksRefund() public {
         (uint256 billId, uint256 deadline) = _createBill2(recipient, 1 days);
         _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
+        vm.prank(bob);   sf.deposit(billId); // auto-settles
 
         uint256 settleDeadline = deadline + GRACE;
-        vm.warp(settleDeadline + 1); // > settleDeadline → REFUNDABLE
+        vm.warp(settleDeadline + 1);
+
+        // Refund is blocked because bill is already settled
+        vm.prank(alice);
+        vm.expectRevert(SplitFlow.AlreadySettled.selector);
+        sf.refund(billId);
+    }
+
+    // (c): underfunded expiry refund still works (unchanged path)
+    function test_underfundedExpiry_refundWorks() public {
+        (uint256 billId, uint256 deadline) = _createBill2(recipient, 1 days);
+        _fund(alice, SHARE_ALICE);
+        vm.prank(alice); sf.deposit(billId); // only alice deposits
+
+        vm.warp(deadline); // underfunded, past deadline → REFUNDABLE
 
         uint256 aliceBefore = usdc.balanceOf(alice);
         vm.prank(alice); sf.refund(billId);
         assertEq(usdc.balanceOf(alice), aliceBefore + SHARE_ALICE);
-
-        uint256 bobBefore = usdc.balanceOf(bob);
-        vm.prank(bob); sf.refund(billId);
-        assertEq(usdc.balanceOf(bob), bobBefore + SHARE_BOB);
 
         // double refund reverts
         vm.prank(alice);
@@ -314,9 +327,13 @@ contract Test_DoubleSettlement is SplitFlowBase {
         (uint256 billId,) = _createBill2(recipient, 1 days);
         _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
+        vm.prank(bob);   sf.deposit(billId); // auto-settles
+
+        // First explicit settleBill() after auto-settlement reverts AlreadySettled
+        vm.expectRevert(SplitFlow.AlreadySettled.selector);
         sf.settleBill(billId);
 
+        // Second explicit call also reverts AlreadySettled
         vm.expectRevert(SplitFlow.AlreadySettled.selector);
         sf.settleBill(billId);
     }
@@ -330,8 +347,7 @@ contract Test_RefundWhenSettled is SplitFlowBase {
         (uint256 billId,) = _createBill2(recipient, 1 days);
         _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
-        sf.settleBill(billId);
+        vm.prank(bob);   sf.deposit(billId); // auto-settles — no explicit settleBill needed
 
         vm.prank(alice);
         vm.expectRevert(SplitFlow.AlreadySettled.selector);
@@ -367,11 +383,12 @@ contract Test_SettleWhenRefundableFundedExpired is SplitFlowBase {
         (uint256 billId, uint256 deadline) = _createBill2(recipient, 1 days);
         _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
+        vm.prank(bob);   sf.deposit(billId); // auto-settles immediately
 
         uint256 settleDeadline = deadline + GRACE;
-        vm.warp(settleDeadline + 1); // > settleDeadline → REFUNDABLE
-        vm.expectRevert(SplitFlow.SettleDeadlinePassed.selector);
+        vm.warp(settleDeadline + 1);
+        // Bill already settled via auto-settle — explicit settleBill reverts AlreadySettled
+        vm.expectRevert(SplitFlow.AlreadySettled.selector);
         sf.settleBill(billId);
     }
 }
@@ -402,20 +419,18 @@ contract Test_CrossBillIsolation is SplitFlowBase {
         // Bill 1 is still OPEN (unaffected)
         assertEq(uint8(sf.getBillState(bill1)), uint8(SplitFlow.BillState.OPEN));
 
-        // Settle bill 0
+        // Bob is last for bill0 — deposit auto-settles to recipient
         uint256 recip2Before = usdc.balanceOf(recip2);
-        sf.settleBill(bill0);
+        // (bill0 was already settled by bob's deposit above)
 
         // Bill 1 escrow unaffected: SplitFlow contract should still hold 0 USDC for bill1
-        // (bill1 has no deposits)
         assertEq(usdc.balanceOf(recip2), recip2Before, "bill1 recipient untouched");
         assertEq(uint8(sf.getBillState(bill1)), uint8(SplitFlow.BillState.OPEN));
 
-        // Now fund and settle bill 1 independently
+        // Now fund bill 1 — dave is last, auto-settles
         _fund(carol, 30e6); _fund(dave, 30e6);
         vm.prank(carol); sf.deposit(bill1);
-        vm.prank(dave);  sf.deposit(bill1);
-        sf.settleBill(bill1);
+        vm.prank(dave);  sf.deposit(bill1); // auto-settles bill1
         assertEq(usdc.balanceOf(recip2), recip2Before + 60e6);
     }
 }
@@ -619,19 +634,21 @@ contract Test_GetBillState is SplitFlowBase {
     }
 
     function test_stateFunded() public {
+        // FUNDED state is now only visible transiently inside deposit().
+        // After the last deposit, the bill is immediately SETTLED via auto-settle.
+        // A partially funded bill (not all payers deposited) is OPEN, not FUNDED.
+        // Test: one-of-two payers deposited → OPEN (not FUNDED)
         (uint256 billId,) = _createBill2(recipient, 1 days);
-        _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
-        vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
-        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.FUNDED));
+        _fund(alice, SHARE_ALICE);
+        vm.prank(alice); sf.deposit(billId); // only alice — bill is partially funded → OPEN
+        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.OPEN));
     }
 
     function test_stateSettled() public {
         (uint256 billId,) = _createBill2(recipient, 1 days);
         _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
-        sf.settleBill(billId);
+        vm.prank(bob);   sf.deposit(billId); // auto-settles — no explicit settleBill needed
         assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.SETTLED));
     }
 
@@ -644,13 +661,19 @@ contract Test_GetBillState is SplitFlowBase {
     }
 
     function test_stateRefundable_fundedExpired() public {
+        // With auto-settlement, a fully funded bill auto-settles immediately.
+        // The FUNDED→REFUNDABLE path (funded but grace expired) is no longer reachable
+        // for new bills under this contract version.
+        // This test verifies that after full funding (auto-settle), warp past
+        // settleDeadline still shows SETTLED (not REFUNDABLE).
         (uint256 billId, uint256 deadline) = _createBill2(recipient, 1 days);
         _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
         vm.prank(alice); sf.deposit(billId);
-        vm.prank(bob);   sf.deposit(billId);
+        vm.prank(bob);   sf.deposit(billId); // auto-settles
         uint256 settleDeadline = deadline + GRACE;
-        vm.warp(settleDeadline + 1); // > settleDeadline → REFUNDABLE
-        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.REFUNDABLE));
+        vm.warp(settleDeadline + 1);
+        // Already settled — state remains SETTLED, not REFUNDABLE
+        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.SETTLED));
     }
 
     function test_stateCancelled() public {
@@ -747,7 +770,8 @@ contract Test_Fuzz_CreateAndDeposit is SplitFlowBase {
             sf.deposit(billId);
         }
 
-        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.FUNDED));
+        // With auto-settlement, the last deposit settles the bill immediately → SETTLED
+        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.SETTLED));
     }
 }
 
@@ -877,6 +901,14 @@ contract SplitFlowHandler is Test {
         try sf.deposit(billId) {
             ghostDeposited[billId][slot] = share;
             ghostDepositCount[billId]++;
+            // If auto-settlement fired (all slots filled), clear ghost deposits
+            SplitFlow.Bill memory bFinal = sf.getBill(billId);
+            if (bFinal.settled) {
+                billSettled[billId] = true;
+                for (uint8 k = 0; k < bFinal.payerCount; k++) {
+                    ghostDeposited[billId][k] = 0;
+                }
+            }
         } catch {}
 
         // Record monotone check
@@ -965,6 +997,169 @@ contract SplitFlowHandler is Test {
         if (!fullyFunded && block.timestamp >= b.deadline) return true;
         if (fullyFunded && block.timestamp > b.settleDeadline) return true;
         return false;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test A – Auto-settle: final deposit transfers funds to recipient in same tx
+// ─────────────────────────────────────────────────────────────────────────────
+contract Test_AutoSettle_FinalDeposit is SplitFlowBase {
+    function test_autoSettle_finalDeposit_recipientReceivesFunds() public {
+        (uint256 billId,) = _createBill2(recipient, 1 days);
+        _fund(alice, SHARE_ALICE);
+        _fund(bob,   SHARE_BOB);
+
+        vm.prank(alice); sf.deposit(billId);
+        // Alice is not the last slot — bill not yet settled
+        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.OPEN));
+
+        uint256 recipientBefore = usdc.balanceOf(recipient);
+        vm.prank(bob); sf.deposit(billId); // last slot — auto-settle fires
+
+        // Recipient received full amount in the same tx as bob's deposit
+        assertEq(usdc.balanceOf(recipient), recipientBefore + TOTAL_2, "auto-settle: recipient");
+        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.SETTLED));
+        SplitFlow.Bill memory b = sf.getBill(billId);
+        assertEq(b.depositCount, 2, "depositCount == payerCount");
+        assertTrue(b.settled, "settled flag set");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test B – Auto-settle: BillSettled event emitted during final deposit
+// ─────────────────────────────────────────────────────────────────────────────
+contract Test_AutoSettle_BillSettledEvent is SplitFlowBase {
+    function test_autoSettle_BillSettled_event() public {
+        (uint256 billId,) = _createBill2(recipient, 1 days);
+        _fund(alice, SHARE_ALICE);
+        _fund(bob,   SHARE_BOB);
+
+        vm.prank(alice); sf.deposit(billId);
+
+        // Expect BillSettled(billId, recipient, TOTAL_2) emitted during bob's deposit
+        vm.expectEmit(true, true, false, true, address(sf));
+        emit SplitFlow.BillSettled(billId, recipient, TOTAL_2);
+
+        vm.prank(bob); sf.deposit(billId);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test C – Auto-settle: blacklisted recipient causes deposit to revert cleanly
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// @dev MockERC20 with per-address transfer blocklist (simulates USDC blacklisting).
+contract MockBlacklistERC20 is MockERC20 {
+    mapping(address => bool) public blacklisted;
+
+    constructor() MockERC20("Blacklist USDC", "bUSDC", 6) {}
+
+    function blacklist(address addr) external {
+        blacklisted[addr] = true;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        require(!blacklisted[from], "USDC: from blacklisted");
+        require(!blacklisted[to],   "USDC: to blacklisted");
+        super._update(from, to, value);
+    }
+}
+
+contract Test_AutoSettle_BlacklistedRecipient is Test {
+    uint256 internal constant SHARE = 50e6;
+    uint256 internal constant TOTAL = 100e6;
+
+    MockBlacklistERC20 internal blToken;
+    SplitFlow          internal sf;
+
+    address internal creator2   = makeAddr("creator2");
+    address internal alice2     = makeAddr("alice2");
+    address internal bob2       = makeAddr("bob2");
+    address internal badRecip   = makeAddr("badRecip");
+
+    function setUp() public {
+        blToken = new MockBlacklistERC20();
+        sf      = new SplitFlow(address(blToken));
+
+        // Blacklist the recipient
+        blToken.blacklist(badRecip);
+
+        // Create 2-payer bill with blacklisted recipient
+        address[] memory payers = new address[](2);
+        payers[0] = alice2; payers[1] = bob2;
+        uint256[] memory shares = new uint256[](2);
+        shares[0] = SHARE; shares[1] = SHARE;
+
+        vm.prank(creator2);
+        sf.createBill("BL", badRecip, TOTAL, payers, shares, block.timestamp + 1 days);
+    }
+
+    function test_autoSettle_blacklistedRecipient_bobDepositReverts() public {
+        // Alice deposits first (safeTransferFrom to contract — allowed)
+        blToken.mint(alice2, SHARE);
+        vm.prank(alice2); blToken.approve(address(sf), SHARE);
+        vm.prank(alice2); sf.deposit(0); // succeeds
+        assertEq(blToken.balanceOf(address(sf)), SHARE, "alice escrow intact");
+
+        // Bob is last — auto-settle tries safeTransfer(badRecip) → reverts
+        blToken.mint(bob2, SHARE);
+        vm.prank(bob2); blToken.approve(address(sf), SHARE);
+        vm.prank(bob2);
+        vm.expectRevert(); // safeTransfer to blacklisted address reverts
+        sf.deposit(0);
+
+        // Alice's slot is still filled (her deposit succeeded independently)
+        SplitFlow.Bill memory b = sf.getBill(0);
+        assertEq(b.deposited[0], SHARE, "alice slot still filled");
+        assertEq(b.deposited[1], 0,     "bob slot not filled (reverted)");
+        assertEq(b.depositCount, 1,     "depositCount == 1");
+        assertFalse(b.settled,          "bill not settled");
+
+        // Contract still holds alice's escrow
+        assertEq(blToken.balanceOf(address(sf)), SHARE, "contract holds alice USDC");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test D – settleBill() reverts AlreadySettled after auto-settle
+// ─────────────────────────────────────────────────────────────────────────────
+contract Test_AutoSettle_SettleBillFallback is SplitFlowBase {
+    function test_settleBill_revertsAlreadySettled_afterAutoSettle() public {
+        (uint256 billId,) = _createBill2(recipient, 1 days);
+        _fund(alice, SHARE_ALICE); _fund(bob, SHARE_BOB);
+        vm.prank(alice); sf.deposit(billId);
+        vm.prank(bob);   sf.deposit(billId); // auto-settles
+
+        // Explicit settleBill() must revert AlreadySettled
+        vm.expectRevert(SplitFlow.AlreadySettled.selector);
+        sf.settleBill(billId);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test E – Auto-settle fires on 5th deposit in a 5-payer bill
+// ─────────────────────────────────────────────────────────────────────────────
+contract Test_AutoSettle_5Payers is SplitFlowBase {
+    function test_autoSettle_5payers() public {
+        (uint256 billId,) = _createBill5(recipient, 1 days);
+        address[5] memory payers5 = [alice, bob, carol, dave, eve];
+        uint256 before = usdc.balanceOf(recipient);
+
+        // First 4 payers deposit — bill stays un-settled
+        for (uint8 i = 0; i < 4; i++) {
+            _fund(payers5[i], 20e6);
+            vm.prank(payers5[i]);
+            sf.deposit(billId);
+            assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.OPEN),
+                "not settled after partial fill");
+        }
+
+        // Eve is the 5th — auto-settle fires
+        _fund(eve, 20e6);
+        vm.prank(eve); sf.deposit(billId);
+
+        assertEq(usdc.balanceOf(recipient), before + 100e6, "5-payer auto-settle");
+        assertEq(uint8(sf.getBillState(billId)), uint8(SplitFlow.BillState.SETTLED));
     }
 }
 
